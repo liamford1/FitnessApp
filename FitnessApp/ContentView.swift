@@ -52,6 +52,7 @@ struct CardioView: View {
     @State private var isWorkoutActive = false
     @State private var workoutStartTime: Date? = nil
     @State private var elapsedTime: TimeInterval = 0
+
     
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
@@ -128,16 +129,15 @@ struct CardioView: View {
             .padding()
             
             
-            Map(coordinateRegion: $region, showsUserLocation: true, annotationItems: cardioManager.locations) { location in
-                MapMarker(coordinate: location.coordinate)
-                    }
-                    .overlay(
-                        MapOverlay(polyline: cardioManager.locations.map { $0.coordinate })
-                            .stroke(Color.blue, lineWidth: 3)
-                    )
-                    .frame(height: 300)
-                    .cornerRadius(15)
-                    .padding()
+            Map(position: .userLocation(followsHeading: false)) { location in
+                MapPolyline(coordinate: cardioManager.location)
+                    .stroke(Color.blue, lineWidth: 3)
+            }
+                
+            .frame(height: 300)
+            .cornerRadius(15)
+            .padding()
+
 
             
             HStack {
@@ -192,26 +192,33 @@ struct CardioView: View {
                 elapsedTime = Date().timeIntervalSince(startTime)
             }
         }
-        .onChange(of: cardioManager.lastLocation) {
-            if let newLocation = cardioManager.lastLocation {
+        .onChange(of: cardioManager.lastLocation) { oldLocation, newLocation in
+            if let newLocation = newLocation {
                 region.center = newLocation.coordinate
             }
         }
     }
 }
 
-struct MapOverlay: Shape {
+struct MapOverlay: View {
     var polyline: [CLLocationCoordinate2D]
-    
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        guard let firstPoint = polyline.first else { return path }
-        path.move(to: CGPoint(x: firstPoint.latitude, y: firstPoint.longitude))
-        
-        for point in polyline.dropFirst() {
-            path.addLine(to: CGPoint(x: point.latitude, y: point.longitude))
+
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                guard !polyline.isEmpty else { return }
+                
+                // Assuming we're mapping coordinates directly
+                let startPoint = CGPoint(x: polyline.first!.longitude, y: polyline.first!.latitude)
+                path.move(to: startPoint)
+                
+                for coordinate in polyline.dropFirst() {
+                    let point = CGPoint(x: coordinate.longitude, y: coordinate.latitude)
+                    path.addLine(to: point)
+                }
+            }
+            .stroke(Color.blue, lineWidth: 3)
         }
-        return path
     }
 }
 
@@ -229,7 +236,7 @@ class CardioManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var workoutDistance: Double = 0.0
     @Published var averageSpeed: Double = 0.0
     @Published var workouts: [Workout] = []
-    @Published var locations: [WorkoutLocation] = []
+    @Published var locations: [CLLocationCoordinate2D] = []
     @Published var lastLocation: CLLocation?
     
     private var pedometer: CMPedometer
@@ -276,10 +283,10 @@ class CardioManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let currentLocation = locations.last else { return }
+        guard let newLocation = locations.last else { return }
 
         if let lastLocation = lastLocation {
-            let distanceInMeters = currentLocation.distance(from: lastLocation)
+            let distanceInMeters = newLocation.distance(from: lastLocation)
             DispatchQueue.main.async {
                 let distanceInKilometers = distanceInMeters / 1000.0
                 let distanceInMiles = distanceInKilometers * 0.621371
@@ -291,12 +298,12 @@ class CardioManager: NSObject, ObservableObject, CLLocationManagerDelegate {
                     self.averageSpeed = self.workoutDistance / (elapsedTime / 3600)
                 }
                 
-                let workoutLocation = WorkoutLocation(coordinate: currentLocation.coordinate)
-                self.locations.append(workoutLocation)
+                let workoutLocation = WorkoutLocation(coordinate: newLocation.coordinate)
+                self.locations.append(newLocation.coordinate)
             }
         }
 
-        self.lastLocation = currentLocation
+        self.lastLocation = newLocation
     }
 
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
